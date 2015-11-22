@@ -34,7 +34,6 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 #include <Wire.h>               // library for serial communication
 #include <Time.h>               // library for time handling / needed for RTC and DCF77
 #include <DS3232RTC.h>          // library for DS3231/2 RTC
-#include <CapacitiveSensor.h>   // library for capacitive switch
 #include <DCF77.h>              // library for dcf77 radio time signal receiver
 #include <IRremote.h>           // library for infrared remote
 
@@ -59,16 +58,30 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 #define QUICK 0xFFE817
 #define SLOW 0xFFC837
 
+// Touch threshold
+#define TTS 50
+
+// Sync timeout
+
+#define SYNCTIMEOUT 60000
+
 // LED defines
 #define NUM_LEDS 114
 
 // PIN defines
-#define STRIP_DATA_PIN 6 // LED strip
+#define STRIP_DATA_PIN 17 // LED strip
 #define IR_RECV_PIN 11   // IR Receiver
 #define ARDUINO_LED 13   //Default Arduino LED
 #define DCF_PIN 2           // Connection pin to DCF 77 device
 #define DCF_INTERRUPT 0    // Interrupt number associated with pin
-#define LDR_PIN 0        // LDR for light level sensing
+#define LDR_PIN 15        // LDR for light level sensing
+
+#define TOUCH_R_PIN 23  // touch sensor input 1 
+#define TOUCH_L_PIN 22  // touch sensor input 2
+
+// RTC PINs (müüsen nicht definiert werden, nur zur Info)
+// SCL 19
+// SDA 18
 
 // dcf variables
 time_t time;
@@ -81,11 +94,13 @@ uint8_t stackptr = 0;
 
 CRGB leds[NUM_LEDS];
 
+// ir receiver
 IRrecv irrecv = IRrecv(IR_RECV_PIN);
 decode_results irDecodeResults;
 
-CapacitiveSensor   cs_4_2 = CapacitiveSensor(4,2);
-CapacitiveSensor   cs_5_3 = CapacitiveSensor(5,3);
+// touch control
+int touchNull_R = 0;
+int touchNull_L = 0;
 
 uint8_t selectedLanguageMode = 0;
 const uint8_t RHEIN_RUHR_MODE = 0; //Define?
@@ -119,6 +134,11 @@ int modeSwitch = 1;
 int set = 0;
 int set2 = 0;
 
+// timeout for dcf77 sync
+int timestart = millis();
+int timenow = 0;
+int timeout = 0;
+
 // forward declaration
 void fastTest();
 void doTouchLogic();
@@ -137,7 +157,7 @@ void displayStrip(CRGB colorCode);
 void timeToStrip(uint8_t hours,uint8_t minutes);
 void doDCFLogic();
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
   #define DEBUG_PRINT(str)  Serial.println (str)
@@ -160,33 +180,48 @@ void setup() {
   FastLED.addLeds<WS2812B, STRIP_DATA_PIN, GRB>(leds, NUM_LEDS);
   resetAndBlack();
   displayStrip();
-        
-        // initialize capacitive switch
-        cs_4_2.set_CS_AutocaL_Millis(0xFFFFFFFF);  
-        
-        cs_5_3.set_CS_AutocaL_Millis(0xFFFFFFFF);  
-  
-        // noch kein DCF modul verfügbar :-(
-  //setup dcf
-  //DCF.Start();
-  //setSyncInterval(3600); //every hour
-  //setSyncProvider(getDCFTime);
-  //DEBUG_PRINT("Waiting for DCF77 time ... ");
-  //DEBUG_PRINT("It will take at least 2 minutes until a first update can be processed.");
-  //while(timeStatus()== timeNotSet) {
-  //  // wait until the time is set by the sync provider
-  //  DEBUG_PRINT(".");
-  //  delay(2000);
-  //}
 
+  touchNull_R = touchRead(TOUCH_R_PIN);
+  touchNull_L = touchRead(TOUCH_L_PIN);
+ 
+  // noch kein DCF modul verfügbar :-(
+
+  //setup dcf
+
+  DCF.Start();
+  DEBUG_PRINT("Waiting for DCF77 time ... ");
+  DEBUG_PRINT("It will take at least 2 minutes until a first update can be processed.");
+  setSyncInterval(3600); //every hour
+  setSyncProvider(getDCFTime);
+
+  while(timeStatus()== timeNotSet && !timeout) {
+    // wait until the time is set by the sync provider or timeout
+    pushFUNK();
+    displayStrip(CRGB::Blue);
+    DEBUG_PRINT(".");
+    delay(1000);
+    resetAndBlack();
+    displayStrip();
+    timenow = millis()- SYNCTIMEOUT;
+    if (timestart < timenow) {
+      timeout = 1;
+      DEBUG_PRINT("No valid DCF signal - giving up!");
+      pushFUNK();
+      displayStrip(CRGB::Red);
+      delay(3000);
+    }
+    delay(1000);
+  }
+  while(timeStatus()== timeNotSet && timeout) {
         // an Stelle von DCF übergangsweise RTC nutzen
         // get time from RTC
         setSyncProvider(RTC.get);   // the function to get the time from the RTC
         if (timeStatus() != timeSet) 
-          Serial.println("Unable to sync with the RTC");
+          DEBUG_PRINT("Unable to sync with the RTC");
         else
-          Serial.println("RTC has set the system time");      
-        // ende zwischenlösung
+          DEBUG_PRINT("RTC has set the system time");      
+        // ende RTC
+  }
   
   //setup ir
   irrecv.enableIRIn();
@@ -194,18 +229,18 @@ void setup() {
 
 void loop() {
   
-        doTouchLogic();             
+   doTouchLogic();             
   
-        // nur nötig, so lange kein DCF modul vorhanden
-        // read time from Serial
-        if (Serial.available()) {
-          time_t t = processSyncMessage();
-          if (t != 0) {
-            RTC.set(t);   // set the RTC and the system time to the received value
-            setTime(t);          
-          }
-        }
-        // end RTC read from Serial
+  // nur nötig, so lange kein DCF modul vorhanden
+  // read time from Serial
+  if (Serial.available()) {
+    time_t t = processSyncMessage();
+    if (t != 0) {
+      RTC.set(t);   // set the RTC and the system time to the received value
+      setTime(t);          
+    }
+  }
+  // end RTC read from Serial
         
   doIRLogic();
   doLDRLogic();
@@ -234,6 +269,7 @@ void loop() {
 
 // start rtc stuff
 // only need until DCF is ready
+
 void digitalClockDisplay(){
   // digital clock display of the time on serial port
   Serial.print(hour());
@@ -265,56 +301,61 @@ unsigned long processSyncMessage() {
 
   if(Serial.find(TIME_HEADER)) {
      pctime = Serial.parseInt();
-     return pctime;
-     if( pctime < DEFAULT_TIME) { // check the value is a valid time (greater than Jan 1 2013)
-       pctime = 0L; // return 0 to indicate that the time is not valid
-     }
+        RTC.set(pctime);
+        Serial.print("Set time to ");
+        Serial.println(pctime);
+        return pctime;
+         if( pctime < DEFAULT_TIME) { // check the value is a valid time (greater than Jan 1 2013)
+           pctime = 0L; // return 0 to indicate that the time is not valid
+         }
   }
+
   return pctime;
 }
-// end rtc stuff
+// end serial time setting
 
 
-unsigned long getDCFTime() {
-  //time_t DCFtime = DCF.getTime();
-  // Indicator that a time check is done
-  //if (DCFtime!=0) {
-  //  DEBUG_PRINT("sync");
-  //}
-
-        // statt DCF time übergangsweise RTC nutzen
-        time_t DCFtime = RTC.get();
-        // ende RTC zwischenlösung 
-
+time_t getDCFTime() {
+  time_t DCFtime = DCF.getTime();
+    // Indicator that a time check is done
+    if (DCFtime!=0) {
+    DEBUG_PRINT("DCF sync");
+  }
+  else {
+    // statt DCF time RTC nutzen
+    time_t DCFtime = RTC.get();
+    DEBUG_PRINT("RTC sync");
+    // ende RTC  
+  }
   return DCFtime;
 }
 
 // Abfrage der kapazitiven Schalter
 // Jeder Druck schaltet durch die vier Displaymodi
+
 void doTouchLogic() {
-    long start = millis();
-    long total1 =  cs_4_2.capacitiveSensor(30);
-    long total2 =  cs_5_3.capacitiveSensor(30);
     
-    //DEBUG_PRINT("doing Touch logic");
+    DEBUG_PRINT("doing Touch logic");
         
-    if (total1 > 100 && set == 0) {
+    if (touchRead(TOUCH_R_PIN) > (touchNull_R + TTS) && set == 0) {
       modeSwitch ++;
       set = 1;
+      DEBUG_PRINT("+"); 
       DEBUG_PRINT(modeSwitch); 
     }
-    if (total1 < 100 && set == 1) {
-      delay(300);
+    if (touchRead(TOUCH_R_PIN) < (touchNull_R + TTS) && set == 1) {
+      delay(500);
       set = 0;
     }
     
-    if (total2 > 100 && set2 == 0) {
+    if (touchRead(TOUCH_L_PIN) > (touchNull_L + TTS) && set2 == 0) {
       modeSwitch --;
       set2 = 1;
+      DEBUG_PRINT("-"); 
       DEBUG_PRINT(modeSwitch); 
     }
-    if (total2 < 100 && set2 == 1) {
-      delay(300);
+    if (touchRead(TOUCH_L_PIN) < (touchNull_L + TTS) && set2 == 1) {
+      delay(500);
       set2 = 0;
     }
     
@@ -345,12 +386,12 @@ void doTouchLogic() {
       }
 }
 
-
 void doLDRLogic() {
   if(millis() >= waitUntilLDR && autoBrightnessEnabled) {
     DEBUG_PRINT("doing LDR logic");
     waitUntilLDR = millis();
-    int ldrVal = map(analogRead(LDR_PIN), 0, 1023, 0, 150);
+    int ldrVal = map(analogRead(LDR_PIN), 150, 1023, 200, 0);
+    DEBUG_PRINT(analogRead(LDR_PIN));
     FastLED.setBrightness(255-ldrVal);
     FastLED.show();
     DEBUG_PRINT(ldrVal);
@@ -806,6 +847,14 @@ void pushHALB() {
   pushToStrip(L25);
   pushToStrip(L34);
 }
+
+void pushFUNK() {
+  pushToStrip(L33);
+  pushToStrip(L46);
+  pushToStrip(L53);
+  pushToStrip(L66);
+}
+
 
 void pushONE() {
   pushToStrip(L113);
