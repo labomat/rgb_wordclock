@@ -63,7 +63,7 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 
 // Sync timeout
 
-#define SYNCTIMEOUT 60000
+#define SYNCTIMEOUT 1*1000 // 1min
 
 // LED defines
 #define NUM_LEDS 114
@@ -79,7 +79,7 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 #define TOUCH_R_PIN 23  // touch sensor input 1 
 #define TOUCH_L_PIN 22  // touch sensor input 2
 
-// RTC PINs (müüsen nicht definiert werden, nur zur Info)
+// RTC PINs (müssen nicht definiert werden, nur zur Info)
 // SCL 19
 // SDA 18
 
@@ -87,6 +87,13 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 time_t time;
 DCF77 DCF = DCF77(DCF_PIN,DCF_INTERRUPT);
 bool timeInSync = false;
+
+// timeout for dcf77 sync
+int timestart = millis();
+int timenow = 0;
+boolean timeout = 0;
+boolean forcedcf = 0; // 1 = kein Timeout
+
 
 // led array
 uint8_t strip[NUM_LEDS];
@@ -126,6 +133,7 @@ long waitUntilParty = 0;
 long waitUntilOff = 0;
 long waitUntilFastTest = 0;
 long waitUntilHeart = 0;
+long waitUntilTree = 0;
 long waitUntilDCF = 0;
 long waitUntilLDR = 0;
 
@@ -133,11 +141,6 @@ long waitUntilLDR = 0;
 int modeSwitch = 1;
 int set = 0;
 int set2 = 0;
-
-// timeout for dcf77 sync
-int timestart = millis();
-int timenow = 0;
-int timeout = 0;
 
 // forward declaration
 void fastTest();
@@ -202,12 +205,13 @@ void setup() {
     delay(1000);
     resetAndBlack();
     displayStrip();
-    timenow = millis()- SYNCTIMEOUT;
-    if (timestart < timenow) {
+    timenow = millis();
+    if (timestart < (timenow - SYNCTIMEOUT) && !forcedcf) {
       timeout = 1;
       DEBUG_PRINT("No valid DCF signal - giving up!");
-      pushFUNK();
-      displayStrip(CRGB::Red);
+      //pushFUNK();
+      //displayStrip(CRGB::Red);
+      //defaultColor = CRGB::Red;
       delay(3000);
     }
     delay(1000);
@@ -259,6 +263,9 @@ void loop() {
       showHeart();
       break;
     case DIY4:
+      showTree();
+      break;
+    case DIY5:
       fastTest();
       break;
     default:
@@ -335,7 +342,7 @@ time_t getDCFTime() {
 
 void doTouchLogic() {
     
-    DEBUG_PRINT("doing Touch logic");
+    //DEBUG_PRINT("doing Touch logic");
         
     if (touchRead(TOUCH_R_PIN) > (touchNull_R + TTS) && set == 0) {
       modeSwitch ++;
@@ -360,11 +367,11 @@ void doTouchLogic() {
     }
     
     
-    if (modeSwitch > 4) {
+    if (modeSwitch > 5) {
       modeSwitch = 1; 
     }
     if (modeSwitch < 1) {
-      modeSwitch = 4; 
+      modeSwitch = 5; 
     }
     
     switch(modeSwitch) {
@@ -380,6 +387,9 @@ void doTouchLogic() {
         case 4:
       displayMode = DIY4;
       break;
+        case 5:
+      displayMode = DIY5;
+      break;
         default:
       displayMode = DIY1;
       break;
@@ -390,7 +400,7 @@ void doLDRLogic() {
   if(millis() >= waitUntilLDR && autoBrightnessEnabled) {
     DEBUG_PRINT("doing LDR logic");
     waitUntilLDR = millis();
-    int ldrVal = map(analogRead(LDR_PIN), 150, 1023, 200, 0);
+    int ldrVal = map(analogRead(LDR_PIN), 0, 120, 0, 240);
     DEBUG_PRINT(analogRead(LDR_PIN));
     FastLED.setBrightness(255-ldrVal);
     FastLED.show();
@@ -541,6 +551,28 @@ void showHeart() {
     waitUntilHeart += oneSecondDelay;
   }
 }
+
+
+void showTree() {
+  if(millis() >= waitUntilTree) {
+    autoBrightnessEnabled = false;
+    DEBUG_PRINT("showing x-mas tree");
+    waitUntilTree = millis();
+    resetAndBlack();
+    pushToStrip(L50); pushToStrip(L48); pushToStrip(L68);
+    pushToStrip(L32); pushToStrip(L72); pushToStrip(L33); pushToStrip(L73);
+    pushToStrip(L25); pushToStrip(L85);
+    pushToStrip(L24); pushToStrip(L84);
+    pushToStrip(L16); pushToStrip(L96);
+    pushToStrip(L17); pushToStrip(L97);
+    pushToStrip(L1); pushToStrip(L18); pushToStrip(L98); pushToStrip(L101);
+    pushToStrip(L21); pushToStrip(L38); pushToStrip(L41); pushToStrip(L58); pushToStrip(L61); pushToStrip(L78); pushToStrip(L81);
+    pushToStrip(L59);
+    displayStrip(CRGB::Green);
+    waitUntilTree += oneSecondDelay;
+  }
+}
+
 
 void fastTest() {
   if(millis() >= waitUntilFastTest) {
