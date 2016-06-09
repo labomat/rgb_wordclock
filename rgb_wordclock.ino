@@ -115,6 +115,11 @@ const uint8_t WESSI_MODE = 1;
 
 boolean autoBrightnessEnabled = true;
 
+// automatic brightness control via ldr
+int newBrightness = 128; 
+int oldBrightness = 128;
+
+
 int displayMode = DIY1;
 
 CRGB defaultColor = CRGB::White;
@@ -233,8 +238,6 @@ void setup() {
 
 void loop() {
   
-   doTouchLogic();             
-  
   // nur nötig, so lange kein DCF modul vorhanden
   // read time from Serial
   if (Serial.available()) {
@@ -245,9 +248,10 @@ void loop() {
     }
   }
   // end RTC read from Serial
-        
-  doIRLogic();
+
   doLDRLogic();
+  doTouchLogic();           
+  doIRLogic();
               
   switch(displayMode) {
     case ONOFF:
@@ -341,7 +345,7 @@ time_t getDCFTime() {
 // Jeder Druck schaltet durch die vier Displaymodi
 
 void doTouchLogic() {
-    
+
     //DEBUG_PRINT("doing Touch logic");
         
     if (touchRead(TOUCH_R_PIN) > (touchNull_R + TTS) && set == 0) {
@@ -354,42 +358,51 @@ void doTouchLogic() {
       delay(500);
       set = 0;
     }
-    
-    if (touchRead(TOUCH_L_PIN) > (touchNull_L + TTS) && set2 == 0) {
-      modeSwitch --;
-      set2 = 1;
-      DEBUG_PRINT("-"); 
-      DEBUG_PRINT(modeSwitch); 
+   
+    if (touchRead(TOUCH_L_PIN) > (touchNull_L + TTS) && set2 == 0) {  
+        modeSwitch --;
+        set2 = 1;
+        DEBUG_PRINT("-"); 
+        DEBUG_PRINT(modeSwitch);
     }
+    
     if (touchRead(TOUCH_L_PIN) < (touchNull_L + TTS) && set2 == 1) {
       delay(500);
       set2 = 0;
     }
     
-    
-    if (modeSwitch > 5) {
+    if (modeSwitch > 6) {
       modeSwitch = 1; 
     }
     if (modeSwitch < 1) {
-      modeSwitch = 5; 
+      modeSwitch = 6; 
     }
     
     switch(modeSwitch) {
         case 1:
+      // Clock  
       displayMode = DIY1;
       break;
         case 2:
+      // Party
       displayMode = DIY2;
       break;
         case 3:
+      // Heart
       displayMode = DIY3;
       break;
         case 4:
+      // Tree
       displayMode = DIY4;
       break;
         case 5:
+      // Test
       displayMode = DIY5;
       break;
+        case 6:
+      displayMode = ONOFF;
+      break;
+      
         default:
       displayMode = DIY1;
       break;
@@ -400,11 +413,26 @@ void doLDRLogic() {
   if(millis() >= waitUntilLDR && autoBrightnessEnabled) {
     DEBUG_PRINT("doing LDR logic");
     waitUntilLDR = millis();
-    int ldrVal = map(analogRead(LDR_PIN), 0, 120, 0, 240);
+    
+    
+    //int ldrVal = map(analogRead(LDR_PIN), 0, 120, 0, 240);
+    int ldrVal = analogRead(LDR_PIN);
+    const int threshold = 40;
+
+    DEBUG_PRINT("Read:");
     DEBUG_PRINT(analogRead(LDR_PIN));
-    FastLED.setBrightness(255-ldrVal);
-    FastLED.show();
+    
+    int newBrightness = (255-(2*ldrVal));
+    
+    if ((newBrightness > (oldBrightness+threshold)) xor (newBrightness < (oldBrightness-threshold))) {
+      FastLED.setBrightness(newBrightness);
+      FastLED.show();
+      oldBrightness = newBrightness;
+    }
+    DEBUG_PRINT("Value:");
     DEBUG_PRINT(ldrVal);
+    DEBUG_PRINT("Brightness:");
+    DEBUG_PRINT(newBrightness);
     waitUntilLDR += oneSecondDelay;
   }
 }
