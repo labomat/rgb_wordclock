@@ -32,10 +32,12 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 //Library includes
 #include <FastLED.h>            // library for ws2812 led arry
 #include <Wire.h>               // library for serial communication
-#include <Time.h>               // library for time handling / needed for RTC and DCF77
+#include <TimeLib.h>            // library for time handling / needed for RTC and DCF77
+#include <Timezone.h>
 #include <DS3232RTC.h>          // library for DS3231/2 RTC
 #include <DCF77.h>              // library for dcf77 radio time signal receiver
 #include <IRremote.h>           // library for infrared remote
+
 
 //#include "default_layout.h"
 //#include "alt_layout1.h"
@@ -76,16 +78,15 @@ Programm erhalten haben. Wenn nicht, siehe <http://www.gnu.org/licenses/>.
 #define DCF_INTERRUPT 0    // Interrupt number associated with pin
 #define LDR_PIN 15        // LDR for light level sensing
 
-#define TOUCH_R_PIN 23  // touch sensor input 1 
-#define TOUCH_L_PIN 22  // touch sensor input 2
+#define TOUCH_PIN 22  // touch sensor input
 
 // RTC PINs (müssen nicht definiert werden, nur zur Info)
 // SCL 19
 // SDA 18
 
 // dcf variables
-time_t time;
-DCF77 DCF = DCF77(DCF_PIN,DCF_INTERRUPT);
+//time_t time;
+//DCF77 DCF = DCF77(DCF_PIN,DCF_INTERRUPT);
 bool timeInSync = false;
 
 // timeout for dcf77 sync
@@ -107,7 +108,7 @@ decode_results irDecodeResults;
 
 // touch control
 int touchNull_R = 0;
-int touchNull_L = 0;
+int touchNull = 0;
 
 uint8_t selectedLanguageMode = 0;
 const uint8_t RHEIN_RUHR_MODE = 0; //Define?
@@ -128,6 +129,8 @@ uint8_t colorIndex = 0;
 int testHours = 0;
 int testMinutes = 0;
 
+const unsigned long DEFAULT_TIME = 1506816000; // Oct 1 2017 
+  
 // multitasking helper
 
 const long oneSecondDelay = 1000;
@@ -146,6 +149,7 @@ long waitUntilLDR = 0;
 int modeSwitch = 1;
 int set = 0;
 int set2 = 0;
+int dark = 0;
 
 // forward declaration
 void fastTest();
@@ -165,6 +169,12 @@ void displayStrip(CRGB colorCode);
 void timeToStrip(uint8_t hours,uint8_t minutes);
 void doDCFLogic();
 
+int baudRate = 115200;
+char unixString[11];
+long unixTime;
+boolean dataSync = false;
+
+
 #define DEBUG
 
 #ifdef DEBUG
@@ -180,6 +190,8 @@ void setup() {
   #endif
   
   pinMode(ARDUINO_LED, OUTPUT);
+
+  pinMode(LDR_PIN, INPUT);
   
   //setup leds incl. fastled
   for(int i = 0; i<NUM_LEDS; i++) {
@@ -189,48 +201,23 @@ void setup() {
   resetAndBlack();
   displayStrip();
 
-  touchNull_R = touchRead(TOUCH_R_PIN);
-  touchNull_L = touchRead(TOUCH_L_PIN);
- 
+  touchNull = touchRead(TOUCH_PIN);
+
+  Serial1.begin(baudRate);
+
   // noch kein DCF modul verfügbar :-(
 
   //setup dcf
 
-  DCF.Start();
-  DEBUG_PRINT("Waiting for DCF77 time ... ");
+//  DCF.Start();
+  DEBUG_PRINT("Waiting for NNTP time ... ");
   DEBUG_PRINT("It will take at least 2 minutes until a first update can be processed.");
-  setSyncInterval(3600); //every hour
-  setSyncProvider(getDCFTime);
-
-  while(timeStatus()== timeNotSet && !timeout) {
-    // wait until the time is set by the sync provider or timeout
-    pushFUNK();
-    displayStrip(CRGB::Blue);
-    DEBUG_PRINT(".");
-    delay(1000);
-    resetAndBlack();
-    displayStrip();
-    timenow = millis();
-    if (timestart < (timenow - SYNCTIMEOUT) && !forcedcf) {
-      timeout = 1;
-      DEBUG_PRINT("No valid DCF signal - giving up!");
-      //pushFUNK();
-      //displayStrip(CRGB::Red);
-      //defaultColor = CRGB::Red;
-      delay(3000);
-    }
-    delay(1000);
-  }
-  while(timeStatus()== timeNotSet && timeout) {
-        // an Stelle von DCF übergangsweise RTC nutzen
-        // get time from RTC
-        setSyncProvider(RTC.get);   // the function to get the time from the RTC
-        if (timeStatus() != timeSet) 
-          DEBUG_PRINT("Unable to sync with the RTC");
-        else
-          DEBUG_PRINT("RTC has set the system time");      
-        // ende RTC
-  }
+  
+   setSyncInterval(3600); //every hour
+  // setSyncProvider(getDCFTime);
+  // get time from RTC
+  setSyncProvider(RTC.get);   // the function to get the time from the RTC
+  // ende RTC
   
   //setup ir
   irrecv.enableIRIn();
@@ -248,6 +235,71 @@ void loop() {
     }
   }
   // end RTC read from Serial
+
+   char buffer[40];
+  int i = 0;
+
+  // while the ESP output available, push it
+  // into the buffer and set the flag true
+  while (Serial1.available()) {
+    buffer[i++] = Serial1.read();
+    dataSync = true;
+    //DEBUG_PRINT("NNTP message received");
+  }
+
+  // if data is available, parse it
+  if (dataSync == true) {
+    if ((buffer[0] == 'U') && (buffer[1] == 'N') && (buffer[2] == 'X')) {
+      // if data sent is the UNX token, take it
+      unixString[0] = buffer[3];
+      unixString[1] = buffer[4];
+      unixString[2] = buffer[5];
+      unixString[3] = buffer[6];
+      unixString[4] = buffer[7];
+      unixString[5] = buffer[8];
+      unixString[6] = buffer[9];
+      unixString[7] = buffer[10];
+      unixString[8] = buffer[11];
+      unixString[9] = buffer[12];
+      unixString[10] = '\0';
+
+      // print the UNX time on the UNO serial
+      DEBUG_PRINT();
+      DEBUG_PRINT("TIME FROM ESP: ");
+      DEBUG_PRINT(unixString[0]);
+      DEBUG_PRINT(unixString[1]);
+      DEBUG_PRINT(unixString[2]);
+      DEBUG_PRINT(unixString[3]);
+      DEBUG_PRINT(unixString[4]);
+      DEBUG_PRINT(unixString[5]);
+      DEBUG_PRINT(unixString[6]);
+      DEBUG_PRINT(unixString[7]);
+      DEBUG_PRINT(unixString[8]);
+      DEBUG_PRINT(unixString[9]);
+      DEBUG_PRINT();
+     
+      unixTime = atol(unixString);
+      
+      // Synchronize the time with the internal clock and RTC external clock module
+      if (unixTime > DEFAULT_TIME) { // simple check if received time is valid (bigger than default time)
+
+        time_t loctime, utc;
+        TimeChangeRule mesz = {"MESZ", Last, Mon, Mar, 2, +120};
+        TimeChangeRule mez = {"MEZ", Last, Mon, Oct, 3, +60};
+        Timezone ger(mesz, mez);
+
+        loctime = ger.toLocal(unixTime);
+
+        DEBUG_PRINT(unixTime);
+        DEBUG_PRINT(loctime);
+        
+        setTime(loctime);
+        RTC.set(loctime);
+        DEBUG_PRINT("NNTP time set");
+        dataSync = false;
+      }
+    }
+  } 
 
   doLDRLogic();
   doTouchLogic();           
@@ -278,8 +330,6 @@ void loop() {
   }
 }
 
-// start rtc stuff
-// only need until DCF is ready
 
 void digitalClockDisplay(){
   // digital clock display of the time on serial port
@@ -308,38 +358,29 @@ void printDigits(int digits){
 
 unsigned long processSyncMessage() {
   unsigned long pctime = 0L;
-  const unsigned long DEFAULT_TIME = 1357041600; // Jan 1 2013 
-
+  unsigned long loctime;
+ 
+  TimeChangeRule mesz = {"MESZ", Last, Mon, Mar, 2, +2};
+  TimeChangeRule mez = {"MEZ", Last, Mon, Oct, 3, +1};
+  Timezone ger(mesz, mez);
+ 
   if(Serial.find(TIME_HEADER)) {
      pctime = Serial.parseInt();
         RTC.set(pctime);
         Serial.print("Set time to ");
         Serial.println(pctime);
-        return pctime;
+        loctime = ger.toLocal(pctime);
+        Serial.print("Set loctime to ");
+        Serial.println(loctime);
+        return loctime;
          if( pctime < DEFAULT_TIME) { // check the value is a valid time (greater than Jan 1 2013)
            pctime = 0L; // return 0 to indicate that the time is not valid
          }
   }
-
   return pctime;
 }
 // end serial time setting
 
-
-time_t getDCFTime() {
-  time_t DCFtime = DCF.getTime();
-    // Indicator that a time check is done
-    if (DCFtime!=0) {
-    DEBUG_PRINT("DCF sync");
-  }
-  else {
-    // statt DCF time RTC nutzen
-    time_t DCFtime = RTC.get();
-    DEBUG_PRINT("RTC sync");
-    // ende RTC  
-  }
-  return DCFtime;
-}
 
 // Abfrage der kapazitiven Schalter
 // Jeder Druck schaltet durch die vier Displaymodi
@@ -347,26 +388,35 @@ time_t getDCFTime() {
 void doTouchLogic() {
 
     //DEBUG_PRINT("doing Touch logic");
-        
-    if (touchRead(TOUCH_R_PIN) > (touchNull_R + TTS) && set == 0) {
-      modeSwitch ++;
-      set = 1;
-      DEBUG_PRINT("+"); 
-      DEBUG_PRINT(modeSwitch); 
-    }
-    if (touchRead(TOUCH_R_PIN) < (touchNull_R + TTS) && set == 1) {
-      delay(500);
-      set = 0;
-    }
-   
-    if (touchRead(TOUCH_L_PIN) > (touchNull_L + TTS) && set2 == 0) {  
-        modeSwitch --;
-        set2 = 1;
-        DEBUG_PRINT("-"); 
-        DEBUG_PRINT(modeSwitch);
-    }
-    
-    if (touchRead(TOUCH_L_PIN) < (touchNull_L + TTS) && set2 == 1) {
+
+   if (touchRead(TOUCH_PIN) > (touchNull + TTS) && set2 == 0) {  
+
+        if ( (modeSwitch == 1) && (dark == 0) && set2 == 0 ) {
+          dark = 1;
+          DEBUG_PRINT("Dark"); 
+          displayMode = ONOFF;
+          off();
+          set2 = 1;
+        }
+        if ( (modeSwitch == 1) && (dark == 1) && set2 == 0 ) {
+          dark = 0;
+          DEBUG_PRINT("Light"); 
+          displayMode = DIY1;
+          autoBrightnessEnabled = true;
+        //to force display update
+        testMinutes = -1;
+        testHours = -1;
+          set2 = 1;
+        }
+
+        if (dark == 0) {
+            modeSwitch --;
+            set2 = 1;
+            DEBUG_PRINT("-"); 
+            DEBUG_PRINT(modeSwitch);
+        }
+   }
+    if (touchRead(TOUCH_PIN) < (touchNull + TTS) && set2 == 1) {
       delay(500);
       set2 = 0;
     }
@@ -399,10 +449,7 @@ void doTouchLogic() {
       // Test
       displayMode = DIY5;
       break;
-        case 6:
-      displayMode = ONOFF;
-      break;
-      
+
         default:
       displayMode = DIY1;
       break;
@@ -415,14 +462,14 @@ void doLDRLogic() {
     waitUntilLDR = millis();
     
     
-    //int ldrVal = map(analogRead(LDR_PIN), 0, 120, 0, 240);
-    int ldrVal = analogRead(LDR_PIN);
-    const int threshold = 40;
+    int ldrVal = map(analogRead(LDR_PIN), 0, 1000, 0, 100);
+    //int ldrVal = analogRead(LDR_PIN);
+    const int threshold = 20;
 
     DEBUG_PRINT("Read:");
     DEBUG_PRINT(analogRead(LDR_PIN));
     
-    int newBrightness = (255-(2*ldrVal));
+    int newBrightness = (255-(ldrVal));
     
     if ((newBrightness > (oldBrightness+threshold)) xor (newBrightness < (oldBrightness-threshold))) {
       FastLED.setBrightness(newBrightness);
